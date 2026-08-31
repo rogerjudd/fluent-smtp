@@ -51,9 +51,23 @@ class CAZ_Sentry_Baseline
      */
     private static function is_self($rel)
     {
-        $rel = str_replace('\\', '/', (string) $rel);
+        $rel = '/' . ltrim(str_replace('\\', '/', (string) $rel), '/');
 
-        return strpos($rel, '/caz-sentry/') !== false
+        // Derived from this file's own location rather than assumed, so that
+        // installing under a different directory name cannot make Sentry
+        // report itself as a critical finding.
+        static $own = null;
+        if ($own === null) {
+            $dir  = str_replace('\\', '/', dirname(dirname(__FILE__)));
+            $root = rtrim(str_replace('\\', '/', CAZ_SENTRY_ABSPATH), '/');
+
+            $own = (strpos($dir, $root . '/') === 0)
+                ? substr($dir, strlen($root)) . '/'
+                : '/caz-sentry/';
+        }
+
+        return strpos($rel, $own) === 0
+            || strpos($rel, '/caz-sentry/') !== false
             || basename($rel) === '00-caz-sentry.php';
     }
 

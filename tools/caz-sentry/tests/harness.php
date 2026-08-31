@@ -35,7 +35,7 @@ define('CAZ_SENTRY_LOG_DIR', $root . '/sentry-logs');
 // Site-specific detection is configured, never hardcoded. These stand in for
 // what an operator would put in config.php after finding shells on their own
 // server.
-define('CAZ_SENTRY_EXTRA_BACKDOOR_NAMES', 'accesson.php, filefuns.php');
+define('CAZ_SENTRY_EXTRA_BACKDOOR_NAMES', 'evilshell.php, dropper2.php');
 define('CAZ_SENTRY_SITE_HOSTS', 'example.com');
 
 foreach (array('Context', 'Signatures', 'Journal', 'Alerts', 'Guard', 'WriteWatcher', 'Baseline') as $class) {
@@ -218,13 +218,14 @@ check('reads generate no events', count(events()) === $before);
 
 // --------------------------------------------------------------- baseline
 
-echo "\n=== Indicators from the real concealedaz.com infection ===\n";
+echo "\n=== Real-world infection shapes ===\n";
 
-// The shells actually found on the site were standalone PHP files reached
-// directly by URL, plus a must-use plugin that prepended junk to every page.
+// Standalone PHP shells reached directly by URL, plus a must-use plugin that
+// prepends junk to every page. Filenames here are stand-ins: the ones that
+// matter on a given server are supplied through config.php, never committed.
 
-file_put_contents($root . '/accesson.php', "<?php /* shell */ ?>");
-$known = find_event('file_write', 'accesson.php');
+file_put_contents($root . '/evilshell.php', "<?php /* shell */ ?>");
+$known = find_event('file_write', 'evilshell.php');
 check('a known backdoor filename is caught on sight', $known !== null);
 if ($known) {
     check('  flagged by filename', isset($known['filename_flag']) && $known['filename_flag'] === 'known_backdoor_filename',
@@ -232,8 +233,8 @@ if ($known) {
     check('  severity is critical', $known['severity'] === 'critical', 'got ' . $known['severity']);
 }
 
-file_put_contents($root . '/wp-content/68425ec92487.php', "<?php /* generated name */ ?>");
-$hex = find_event('file_write', '68425ec92487.php');
+file_put_contents($root . '/wp-content/a1b2c3d4e5f6.php', "<?php /* generated name */ ?>");
+$hex = find_event('file_write', 'a1b2c3d4e5f6.php');
 check('a randomly generated hex filename is caught', $hex !== null);
 if ($hex) {
     check('  flagged as a random hex name', $hex['filename_flag'] === 'random_hex_filename', print_r($hex, true));
@@ -383,9 +384,9 @@ echo "\n=== Filename judgements ===\n";
 $badNames = array(
     'wp-content/uploads/2026/08/shell.php'      => 'php_file_in_uploads',
     'wp-content/mu-plugins/index.php'           => 'mu_plugin_executes_on_every_page_load',
-    'accesson.php'                              => 'known_backdoor_filename',
-    'wp-content/plugins/x/filefuns.php'         => 'known_backdoor_filename',
-    'wp-content/68425ec92487.php'               => 'random_hex_filename',
+    'evilshell.php'                              => 'known_backdoor_filename',
+    'wp-content/plugins/x/dropper2.php'         => 'known_backdoor_filename',
+    'wp-content/a1b2c3d4e5f6.php'               => 'random_hex_filename',
     'wp-content/uploads/invoice.pdf.php'        => 'double_extension',
     'wp-content/cache/cache.php'                => 'php_file_in_cache_directory',
 );
