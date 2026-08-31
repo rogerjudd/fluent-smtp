@@ -8,7 +8,7 @@
  * into a thousand emails.
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 
@@ -47,47 +47,110 @@ class CAZ_Sentry_Alerts
         if (defined('CAZ_SENTRY_ALERT_EMAIL') && CAZ_SENTRY_ALERT_EMAIL) {
             return CAZ_SENTRY_ALERT_EMAIL;
         }
-        if (function_exists('get_option')) {
-            $stored = get_option('caz_sentry_alert_email', '');
-            if ($stored) {
-                return $stored;
-            }
+        $stored = self::state_get('alert_email', '');
+
+        return $stored ? $stored : '';
+    }
+
+    /**
+     * Read a small piece of state.
+     *
+     * When Sentry is started from prepend.php there is no WordPress, so no
+     * options table — and that is exactly the case that matters, because a
+     * standalone backdoor request is the one we most want to hear about.
+     * Fall back to a file beside the journal.
+     */
+    private static function state_get($key, $default = 0)
+    {
+        if (function_exists('get_option') && isset($GLOBALS['wpdb'])) {
+            return get_option('caz_sentry_' . $key, $default);
         }
-        return '';
+
+        CAZ_Sentry_Journal::ignore_start();
+        $raw = @file_get_contents(CAZ_Sentry_Journal::dir() . '/alerts.json');
+        CAZ_Sentry_Journal::ignore_end();
+
+        $state = $raw ? json_decode($raw, true) : null;
+
+        return (is_array($state) && isset($state[$key])) ? $state[$key] : $default;
+    }
+
+    private static function state_set($key, $value)
+    {
+        if (function_exists('update_option') && isset($GLOBALS['wpdb'])) {
+            update_option('caz_sentry_' . $key, $value, false);
+            return;
+        }
+
+        $path = CAZ_Sentry_Journal::dir() . '/alerts.json';
+
+        CAZ_Sentry_Journal::ignore_start();
+        $raw   = @file_get_contents($path);
+        $state = $raw ? json_decode($raw, true) : array();
+        if (!is_array($state)) {
+            $state = array();
+        }
+        $state[$key] = $value;
+        @file_put_contents($path, json_encode($state), LOCK_EX);
+        CAZ_Sentry_Journal::ignore_end();
+    }
+
+    /** wp_mail when WordPress is up, PHP's mail() when it is not. */
+    private static function send($to, $subject, $body)
+    {
+        if (function_exists('wp_mail')) {
+            return (bool) @wp_mail($to, $subject, $body);
+        }
+        if (function_exists('mail')) {
+            return (bool) @mail($to, $subject, $body);
+        }
+        return false;
     }
 
     public static function flush()
     {
-        if (!self::$queue || !function_exists('wp_mail')) {
+        if (!self::$queue) {
             return;
         }
 
         $queue      = self::$queue;
         self::$queue = array();
 
-        $last = (int) get_option('caz_sentry_last_alert', 0);
+        $last = (int) self::state_get('last_alert', 0);
         $now  = time();
 
         if (($now - $last) < self::COOLDOWN_SECONDS) {
             // Still record that events were suppressed so the count in the
             // dashboard matches reality.
-            update_option('caz_sentry_suppressed', (int) get_option('caz_sentry_suppressed', 0) + count($queue), false);
+            self::state_set('suppressed', (int) self::state_get('suppressed', 0) + count($queue));
             return;
         }
 
-        update_option('caz_sentry_last_alert', $now, false);
+        self::state_set('last_alert', $now);
 
-        $suppressed = (int) get_option('caz_sentry_suppressed', 0);
+        $suppressed = (int) self::state_get('suppressed', 0);
         if ($suppressed) {
-            update_option('caz_sentry_suppressed', 0, false);
+            self::state_set('suppressed', 0);
         }
 
-        $site    = function_exists('get_bloginfo') ? get_bloginfo('name') : 'WordPress';
+        // WordPress may not be loaded at all — a standalone backdoor request
+        // never boots it — so fall back to the hostname.
+        $host    = isset($_SERVER['HTTP_HOST']) ? (string) $_SERVER['HTTP_HOST'] : 'this site';
+        $site    = function_exists('get_bloginfo') ? get_bloginfo('name') : $host;
         $subject = sprintf('[Sentry] %d suspicious event%s on %s', count($queue), count($queue) === 1 ? '' : 's', $site);
 
         $body  = "CAZ Sentry recorded activity worth looking at.\n\n";
-        $body .= 'Site: ' . (function_exists('home_url') ? home_url('/') : '') . "\n";
-        $body .= 'Time: ' . gmdate('Y-m-d H:i:s') . " UTC\n\n";
+        $body .= 'Site: ' . (function_exists('home_url') ? home_url('/') : $host) . "\n";
+        $body .= 'Time: ' . gmdate('Y-m-d H:i:s') . " UTC\n";
+
+        if (!function_exists('wp_mail')) {
+            $body .= "\nNOTE: this request never loaded WordPress. That means it hit a PHP\n"
+                   . "file directly rather than going through the site — which is exactly\n"
+                   . "how a standalone backdoor is used. Treat the entry point below as\n"
+                   . "hostile until proven otherwise.\n";
+        }
+
+        $body .= "\n";
 
         $context = CAZ_Sentry_Context::snapshot();
         $body .= "Request that triggered this:\n";
@@ -132,17 +195,19 @@ class CAZ_Sentry_Alerts
             $body .= $suppressed . " further events were recorded during the notification cooldown.\n\n";
         }
 
-        $body .= "Full detail: " . (function_exists('admin_url') ? admin_url('tools.php?page=caz-sentry') : '') . "\n";
+        if (function_exists('admin_url')) {
+            $body .= "Full detail: " . admin_url('tools.php?page=caz-sentry') . "\n";
+        }
         $body .= "Journal:     " . CAZ_Sentry_Journal::dir() . "/events.log\n";
 
-        @wp_mail(self::recipient(), $subject, $body);
+        self::send(self::recipient(), $subject, $body);
 
         self::webhook($queue);
     }
 
     private static function webhook($queue)
     {
-        $url = defined('CAZ_SENTRY_WEBHOOK') ? CAZ_SENTRY_WEBHOOK : get_option('caz_sentry_webhook', '');
+        $url = defined('CAZ_SENTRY_WEBHOOK') ? CAZ_SENTRY_WEBHOOK : self::state_get('webhook', '');
         if (!$url || !function_exists('wp_remote_post')) {
             return;
         }

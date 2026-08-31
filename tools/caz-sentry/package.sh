@@ -4,8 +4,11 @@ set -e
 cd "$(dirname "$0")"
 
 php -l caz-sentry.php > /dev/null
+php -l prepend.php > /dev/null
 for f in includes/*.php; do php -l "$f" > /dev/null; done
-php tests/harness.php > /dev/null || { echo "Tests failed; not packaging."; exit 1; }
+
+php tests/harness.php      > /dev/null || { echo "Behaviour tests failed; not packaging."; exit 1; }
+php tests/prepend-test.php > /dev/null || { echo "Prepend tests failed; not packaging."; exit 1; }
 
 rm -f caz-sentry.zip
 zip -rq caz-sentry.zip . \

@@ -11,7 +11,7 @@
  * altogether so there is no per-request IO cost in steady state.
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 

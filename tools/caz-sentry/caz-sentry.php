@@ -14,12 +14,28 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-if (defined('CAZ_SENTRY_VERSION')) {
-    return; // already loaded (e.g. present as both mu-plugin and plugin)
+// prepend.php may already have started the watcher before WordPress existed.
+// In that case the class is loaded but the WordPress-side hooks are not, so
+// finish the job rather than returning early.
+if (class_exists('CAZ_Sentry', false)) {
+    CAZ_Sentry::boot_wp();
+    return;
 }
 
 define('CAZ_SENTRY_VERSION', '1.0.0');
 define('CAZ_SENTRY_PATH', __DIR__);
+
+// Sentry resolves paths through its own constants rather than reading ABSPATH
+// directly, so that prepend.php can run outside WordPress without defining
+// ABSPATH itself. Defining ABSPATH globally would disable the
+// `if (!defined('ABSPATH')) exit;` direct-access guard that WordPress files,
+// themes and plugins rely on — a protection worth keeping intact.
+if (!defined('CAZ_SENTRY_ABSPATH')) {
+    define('CAZ_SENTRY_ABSPATH', ABSPATH);
+}
+if (!defined('CAZ_SENTRY_CONTENT_DIR')) {
+    define('CAZ_SENTRY_CONTENT_DIR', defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : ABSPATH . 'wp-content');
+}
 
 class CAZ_Sentry
 {
@@ -78,6 +94,11 @@ class CAZ_Sentry
         self::load_classes();
 
         if (self::mode() !== 'full') {
+            return;
+        }
+        // prepend.php may have armed the watcher already, before WordPress
+        // loaded. Do not arm it twice.
+        if (CAZ_Sentry_Write_Watcher::is_active()) {
             return;
         }
         if (!CAZ_Sentry_Guard::may_arm()) {

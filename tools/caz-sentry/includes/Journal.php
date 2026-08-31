@@ -6,7 +6,7 @@
  * that logging can never recurse into the watcher that produced the event.
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 
@@ -37,8 +37,7 @@ class CAZ_Sentry_Journal
         if (defined('CAZ_SENTRY_LOG_DIR') && CAZ_SENTRY_LOG_DIR) {
             $dir = rtrim(CAZ_SENTRY_LOG_DIR, '/\\');
         } else {
-            $base = defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : (ABSPATH . 'wp-content');
-            $dir  = $base . '/caz-sentry';
+            $dir = CAZ_SENTRY_CONTENT_DIR . '/caz-sentry';
         }
 
         self::$dir = $dir;

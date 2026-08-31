@@ -7,7 +7,7 @@
  * content itself. These hooks watch the places that persistence actually uses.
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 
@@ -393,7 +393,7 @@ class CAZ_Sentry_DbWatcher
     private static function blame()
     {
         $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 25);
-        $root   = rtrim(str_replace('\\', '/', ABSPATH), '/');
+        $root   = rtrim(str_replace('\\', '/', CAZ_SENTRY_ABSPATH), '/');
         $self   = str_replace('\\', '/', dirname(dirname(__FILE__)));
 
         foreach ($frames as $frame) {

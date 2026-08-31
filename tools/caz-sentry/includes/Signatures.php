@@ -8,7 +8,7 @@
  * of these), which is why every event records the surrounding evidence.
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 

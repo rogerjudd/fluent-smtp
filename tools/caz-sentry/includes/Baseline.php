@@ -9,7 +9,7 @@
  * point is not PHP — which is itself a decisive finding.
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 
@@ -161,7 +161,7 @@ class CAZ_Sentry_Baseline
 
     private static function walk($lastScan, $started)
     {
-        $root = rtrim(str_replace('\\', '/', ABSPATH), '/');
+        $root = rtrim(str_replace('\\', '/', CAZ_SENTRY_ABSPATH), '/');
 
         $files      = array();
         $suspicious = array();
@@ -343,7 +343,7 @@ class CAZ_Sentry_Baseline
         }
 
         if ($type !== 'file_removed') {
-            $full = rtrim(ABSPATH, '/') . $path;
+            $full = rtrim(CAZ_SENTRY_ABSPATH, '/') . $path;
             $ext  = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
             if (in_array($ext, array('php', 'phtml', 'js', 'htaccess', 'inc', 'html', 'ini'), true) || strpos($path, '.htaccess') !== false) {
                 CAZ_Sentry_Journal::ignore_start();

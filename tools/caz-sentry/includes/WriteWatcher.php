@@ -17,7 +17,7 @@
  *    dying while it is active (see CAZ_Sentry_Guard).
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 
@@ -89,8 +89,8 @@ class CAZ_Sentry_Write_Watcher
 
         self::$selfDir = dirname(dirname(__FILE__));
 
-        $root = defined('ABSPATH') ? rtrim(str_replace('\\', '/', ABSPATH), '/') : '';
-        $content = defined('WP_CONTENT_DIR') ? rtrim(str_replace('\\', '/', WP_CONTENT_DIR), '/') : $root . '/wp-content';
+        $root    = rtrim(str_replace('\\', '/', CAZ_SENTRY_ABSPATH), '/');
+        $content = rtrim(str_replace('\\', '/', CAZ_SENTRY_CONTENT_DIR), '/');
 
         self::$roots = array_values(array_unique(array_filter(array($root, $content))));
 
@@ -401,7 +401,7 @@ class CAZ_Sentry_Write_Watcher
         if ($file === '') {
             return '(no file)';
         }
-        $root = defined('ABSPATH') ? rtrim(str_replace('\\', '/', ABSPATH), '/') : '';
+        $root = rtrim(str_replace('\\', '/', CAZ_SENTRY_ABSPATH), '/');
         $file = str_replace('\\', '/', $file);
         if ($root !== '' && strpos($file, $root . '/') === 0) {
             return substr($file, strlen($root) + 1);

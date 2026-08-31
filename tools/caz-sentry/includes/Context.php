@@ -7,7 +7,7 @@
  * from 203.0.113.9 while logged out".
  */
 
-if (!defined('ABSPATH')) {
+if (!defined('ABSPATH') && !defined('CAZ_SENTRY_ABSPATH')) {
     exit;
 }
 

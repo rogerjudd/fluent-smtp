@@ -28,6 +28,8 @@ file_put_contents($root . '/wp-includes/version.php', "<?php \$wp_version = '6.5
 
 define('ABSPATH', $root . '/');
 define('WP_CONTENT_DIR', $root . '/wp-content');
+define('CAZ_SENTRY_ABSPATH', $root . '/');
+define('CAZ_SENTRY_CONTENT_DIR', $root . '/wp-content');
 define('CAZ_SENTRY_LOG_DIR', $root . '/sentry-logs');
 
 foreach (array('Context', 'Signatures', 'Journal', 'Alerts', 'Guard', 'WriteWatcher', 'Baseline') as $class) {

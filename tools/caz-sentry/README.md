@@ -75,10 +75,58 @@ define( 'CAZ_SENTRY_LOG_DIR', dirname( ABSPATH ) . '/sentry-logs' );
 define( 'CAZ_SENTRY_ALERT_EMAIL', 'you@example.com' );
 ```
 
-### Optional: catch writes that happen before WordPress loads
+### The blind spot in every install above, and how to close it
 
-For maximum coverage, load Sentry from `wp-config.php` itself — earlier than
-even a must-use plugin. Add this **immediately after** the `ABSPATH`
+**A must-use plugin only sees requests that load WordPress.** A standalone
+backdoor does not. When someone requests `concealedaz.com/accesson.php`
+directly, PHP runs that one file and nothing else — no WordPress, no
+mu-plugins, no Sentry. Whatever that shell writes is invisible to the write
+watcher. The hourly scan still notices the *result*, but by then the
+attribution is gone.
+
+That matters here specifically, because the shells found on this site are
+exactly that kind: reached by typing the URL, invisible to visitors and to
+"View Source".
+
+PHP's `auto_prepend_file` closes it. That directive runs a chosen file before
+*every* PHP script on the server, WordPress or not — so a shell invoked
+directly is watched from its first instruction. Create or edit `.user.ini` in
+the web root:
+
+```ini
+auto_prepend_file = "/full/path/to/wp-content/mu-plugins/caz-sentry/prepend.php"
+```
+
+Use the absolute filesystem path, not a URL. Then copy `config.sample.php` to
+`config.php` and set the log directory and alert address there — at that point
+in the request `wp-config.php` has not been read, so its constants do not
+exist yet. Define each constant in one file only.
+
+**This is the highest-risk install, and the trade is real.** A fatal error in a
+prepended file breaks every PHP request on the site, wp-admin included, and
+the only way back is file access. `prepend.php` is built for that: it wraps
+everything, refuses to start unless it can confirm it is in a WordPress root,
+does nothing if any of its own files are missing, and is covered by a test
+suite that specifically checks a broken or partially quarantined install still
+serves requests normally. But test it on staging first if you have one.
+
+Two ways out, in order of speed:
+
+1. Create an empty file named `caz-sentry-off` in the `caz-sentry` directory.
+   Sentry stops loading on the next request; no PHP or ini editing.
+2. Remove the `auto_prepend_file` line from `.user.ini`. Changes there can take
+   up to five minutes to apply, since PHP caches the file
+   (`user_ini.cache_ttl`, 300 seconds by default).
+
+It never defines `ABSPATH`. That is deliberate: WordPress files, themes and
+plugins block direct access with `if (!defined('ABSPATH')) exit;`, and defining
+it globally from a prepend file would quietly disable that protection across
+the entire site. Sentry resolves paths through its own constants instead.
+
+### Also optional: load early from wp-config.php
+
+Less coverage than `auto_prepend_file` (it still only applies to requests that
+load WordPress) but lower risk. Add this **immediately after** the `ABSPATH`
 definition at the bottom of `wp-config.php`:
 
 ```php
@@ -87,8 +135,8 @@ if ( file_exists( ABSPATH . 'wp-content/mu-plugins/caz-sentry/caz-sentry.php' ) 
 }
 ```
 
-Safe to do alongside the mu-plugin install — Sentry detects the double load
-and ignores the second one.
+Safe alongside any of the installs above — Sentry detects a double load and
+finishes the setup rather than starting twice.
 
 ## Settings
 
@@ -242,6 +290,7 @@ use **Re-arm write watcher** on the Overview tab.
 
 ```
 php tools/caz-sentry/tests/harness.php
+php tools/caz-sentry/tests/prepend-test.php
 ```
 
 Builds a throwaway WordPress-shaped directory, turns the watcher on, and then
@@ -254,5 +303,12 @@ fail-safe guard trips.
 It also replays this site's specific infection: a `cache.php` dropped into a
 cache directory, a shell named `accesson.php`, a `68425ec92487.php`, and a
 `mu-plugins/index.php` carrying `GIF89` markers — checking each is caught and
-that ordinary plugin updates and Sentry's own files are not. 91 assertions,
-no WordPress required.
+that ordinary plugin updates and Sentry's own files are not.
+
+`prepend-test.php` covers the `auto_prepend_file` install in separate PHP
+processes with no WordPress present at all: a backdoor writing a payload is
+still caught and attributed, `ABSPATH` stays undefined so direct-access guards
+keep working, the kill switch works, and a broken or partially quarantined
+install still serves requests normally rather than taking the site down.
+
+109 assertions across both suites, no WordPress required.
