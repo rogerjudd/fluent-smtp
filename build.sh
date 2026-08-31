@@ -32,6 +32,7 @@ zip -r $ZIP_NAME . \
     -x "*.git*" \
     -x "node_modules/*" \
     -x "tests/*" \
+    -x "tools/*" \
     -x "svn/*" \
     -x "resources/*" \
     -x "build.sh" \
