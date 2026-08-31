@@ -35,6 +35,28 @@ class CAZ_Sentry_Baseline
         '/wp-content/uploads/backup',
     );
 
+    /**
+     * Directories where any new file deserves a hard look, because code
+     * placed there runs on every request.
+     */
+    private static $criticalDirs = array(
+        '/wp-content/mu-plugins',
+    );
+
+    /**
+     * Sentry is itself installed into mu-plugins, so without this it would
+     * report its own files as critical findings on the first scan. They are
+     * still baselined — tampering with them must be visible — but they are
+     * not flagged on the strength of where they live.
+     */
+    private static function is_self($rel)
+    {
+        $rel = str_replace('\\', '/', (string) $rel);
+
+        return strpos($rel, '/caz-sentry/') !== false
+            || basename($rel) === '00-caz-sentry.php';
+    }
+
     /** Extensions that can execute, or that commonly carry a payload. */
     private static $risky = array(
         'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phps', 'phar',
@@ -190,9 +212,17 @@ class CAZ_Sentry_Baseline
                 $ext       = strtolower((string) pathinfo($entry, PATHINFO_EXTENSION));
                 $risky     = in_array($ext, self::$risky, true) || $entry[0] === '.' || $ext === '';
 
+                // Name and location alone can condemn a file, anywhere in the
+                // install — a known backdoor name, a random hex name, or PHP
+                // sitting in mu-plugins or a cache directory.
+                $byName = self::is_self($rel) ? null : CAZ_Sentry_Signatures::match_filename($rel);
+                if ($byName) {
+                    $suspicious[$rel] = $byName;
+                }
+
                 if ($inUploads) {
                     $found = self::inspect_upload($full, $rel, $entry, $ext, $risky, $lastScan);
-                    if ($found) {
+                    if ($found && !isset($suspicious[$rel])) {
                         $suspicious[$rel] = $found;
                     }
                     if (!$risky) {
@@ -335,6 +365,20 @@ class CAZ_Sentry_Baseline
                 $event['severity'] = 'high';
             }
             $event['core'] = 1;
+        }
+
+        foreach (self::$criticalDirs as $dir) {
+            if (strpos($path, $dir . '/') === 0 && !self::is_self($path)) {
+                $event['severity'] = 'critical';
+                $event['note']     = 'This directory runs on every page load, before any other plugin.';
+                break;
+            }
+        }
+
+        $byName = self::is_self($path) ? null : CAZ_Sentry_Signatures::match_filename($path);
+        if ($byName) {
+            $event['filename_flag'] = $byName['reason'];
+            $event['severity']      = $byName['severity'];
         }
 
         CAZ_Sentry_Journal::write($event);

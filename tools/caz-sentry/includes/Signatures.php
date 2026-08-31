@@ -62,6 +62,11 @@ class CAZ_Sentry_Signatures
         'js_hidden_iframe'  => array('/<iframe[^>]{0,200}(?:width\s*=\s*[\'"]?0|display\s*:\s*none|visibility\s*:\s*hidden)/i', 'high'),
         'js_redirect_ua'    => array('/(?:googlebot|bingbot)[^\n]{0,200}(?:location\.href|window\.location|header\s*\(\s*[\'"]Location)/i', 'critical'),
 
+        // --- Output-prepending injectors ------------------------------------
+        'gif_marker_in_php' => array('/GIF89a?;?\s*<\?php|<\?php[^\n]{0,200}GIF89/i', 'critical'),
+        'ob_start_injector' => array('/ob_start\s*\(\s*[\'"]?\w*(?:callback|inject|repl)/i', 'high'),
+        'header_prepend'    => array('/add_action\s*\(\s*[\'"](?:muplugins_loaded|plugins_loaded)[\'"][^)]{0,80}(?:ob_start|print|echo)/i', 'high'),
+
         // --- .htaccess tampering -------------------------------------------
         'htaccess_redirect' => array('/RewriteRule[^\n]*https?:\/\/(?!(?:www\.)?concealedaz\.com)/i', 'high'),
         'htaccess_php_exec' => array('/php_(?:value|flag)\s+(?:auto_prepend_file|allow_url_include|safe_mode)/i', 'critical'),
@@ -144,6 +149,85 @@ class CAZ_Sentry_Signatures
         }
 
         return $hits;
+    }
+
+    /**
+     * Filenames seen in this site's infection, plus long-standing web shells.
+     * Add to this list as new droppings are found.
+     */
+    private static $knownBadNames = array(
+        'accesson.php'  => 1,
+        'filefuns.php'  => 1,
+        'alfa.php'      => 1,
+        'wso.php'       => 1,
+        'c99.php'       => 1,
+        'r57.php'       => 1,
+        'wp-conflg.php' => 1,
+        'wp-cofig.php'  => 1,
+    );
+
+    /**
+     * Judge a file by its name and location alone — useful before the content
+     * is even read, and the fastest way to spot a re-dropped backdoor.
+     *
+     * @param string $relPath Path relative to the WordPress root.
+     * @return array|null array('reason' => ..., 'severity' => ...)
+     */
+    public static function match_filename($relPath)
+    {
+        $relPath = ltrim(str_replace('\\', '/', (string) $relPath), '/');
+        $name    = basename($relPath);
+        $lower   = strtolower($name);
+        $ext     = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+        $isPhp   = in_array($ext, array('php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'phps'), true);
+
+        if (isset(self::$knownBadNames[$lower])) {
+            return array('reason' => 'known_backdoor_filename', 'severity' => 'critical');
+        }
+
+        // Two forms of the same trick: "shell.php.jpg" (php buried in the
+        // middle) and "invoice.pdf.php" (a document name with php tacked on).
+        if (preg_match('/\.(?:php|phtml|phar)\./i', $name)) {
+            return array('reason' => 'double_extension', 'severity' => 'critical');
+        }
+        if ($isPhp && preg_match('/\.(?:jpe?g|png|gif|bmp|webp|svg|ico|pdf|docx?|xlsx?|pptx?|csv|txt|zip|gz|mp[34]|avi|mov)\.[a-z0-9]+$/i', $name)) {
+            return array('reason' => 'double_extension', 'severity' => 'critical');
+        }
+
+        // Randomly generated shell names: 68425ec92487.php and friends.
+        if ($isPhp && preg_match('/^[0-9a-f]{8,32}\.[a-z0-9]+$/i', $name)) {
+            return array('reason' => 'random_hex_filename', 'severity' => 'critical');
+        }
+        // Generated names that are not hex: all lowercase, no word structure,
+        // and digit-heavy. Deliberately narrow — CamelCase class files and
+        // ordinary lowercase names like "abstractlogger.php" must not trip it.
+        $stem = strtolower((string) pathinfo($name, PATHINFO_FILENAME));
+        if ($isPhp
+            && preg_match('/^[a-z0-9]{16,40}$/', $stem)
+            && preg_match_all('/[0-9]/', $stem) >= 4
+            && $stem === (string) pathinfo($name, PATHINFO_FILENAME)) {
+            return array('reason' => 'random_filename', 'severity' => 'high');
+        }
+
+        // Must-use plugins run on every single page load, before anything
+        // else. That is how the header injection on this site was delivered,
+        // so any PHP landing there is treated as an emergency.
+        if ($isPhp && strpos($relPath, 'wp-content/mu-plugins/') === 0) {
+            return array('reason' => 'mu_plugin_executes_on_every_page_load', 'severity' => 'critical');
+        }
+
+        // A cache directory holds generated markup, never executable code.
+        // Anchored to the real WordPress cache locations: plenty of vendor
+        // packages ship a legitimate directory named "cache".
+        if ($isPhp && preg_match('#^wp-content/(?:cache|et-cache|uploads/cache)/#', $relPath)) {
+            return array('reason' => 'php_file_in_cache_directory', 'severity' => 'critical');
+        }
+
+        if ($isPhp && strpos($relPath, 'wp-content/uploads/') === 0) {
+            return array('reason' => 'php_file_in_uploads', 'severity' => 'critical');
+        }
+
+        return null;
     }
 
     public static function worst_severity(array $hits)

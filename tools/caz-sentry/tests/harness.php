@@ -18,7 +18,7 @@ foreach (array(
     '/wp-includes', '/wp-admin',
     '/wp-content/plugins/legit', '/wp-content/plugins/compromised',
     '/wp-content/themes/twentytwenty', '/wp-content/uploads/2026/08',
-    '/wp-content/cache',
+    '/wp-content/cache', '/wp-content/mu-plugins', '/wp-content/upgrade',
 ) as $dir) {
     mkdir($root . $dir, 0755, true);
 }
@@ -210,9 +210,68 @@ check('reads generate no events', count(events()) === $before);
 
 // --------------------------------------------------------------- baseline
 
+echo "\n=== Indicators from the real concealedaz.com infection ===\n";
+
+// The shells actually found on the site were standalone PHP files reached
+// directly by URL, plus a must-use plugin that prepended junk to every page.
+
+file_put_contents($root . '/accesson.php', "<?php /* shell */ ?>");
+$known = find_event('file_write', 'accesson.php');
+check('a known backdoor filename is caught on sight', $known !== null);
+if ($known) {
+    check('  flagged by filename', isset($known['filename_flag']) && $known['filename_flag'] === 'known_backdoor_filename',
+        print_r($known, true));
+    check('  severity is critical', $known['severity'] === 'critical', 'got ' . $known['severity']);
+}
+
+file_put_contents($root . '/wp-content/68425ec92487.php', "<?php /* generated name */ ?>");
+$hex = find_event('file_write', '68425ec92487.php');
+check('a randomly generated hex filename is caught', $hex !== null);
+if ($hex) {
+    check('  flagged as a random hex name', $hex['filename_flag'] === 'random_hex_filename', print_r($hex, true));
+}
+
+// cache.php files were part of this infection, and cache directories are a
+// quiet path -- PHP written there must still be reported.
+file_put_contents($root . '/wp-content/cache/cache.php', "<?php /* looks harmless */ ?>");
+$cachePhp = find_event('file_write', 'cache/cache.php');
+check('PHP written into a quiet cache directory is still reported', $cachePhp !== null);
+if ($cachePhp) {
+    check('  severity is critical', $cachePhp['severity'] === 'critical', 'got ' . $cachePhp['severity']);
+    check('  reason names the cache directory',
+        $cachePhp['filename_flag'] === 'php_file_in_cache_directory', print_r($cachePhp, true));
+}
+
+// The header injection on this site came from wp-content/mu-plugins/index.php.
+file_put_contents($root . '/wp-content/mu-plugins/index.php', "<?php ob_start('inject_cb'); echo \"GIF89a;\"; ?>");
+$mu = find_event('file_write', 'mu-plugins/index.php');
+check('a must-use plugin being written is caught', $mu !== null);
+if ($mu) {
+    check('  severity is critical', $mu['severity'] === 'critical', 'got ' . $mu['severity']);
+    check('  reason explains it runs on every page load',
+        $mu['filename_flag'] === 'mu_plugin_executes_on_every_page_load', print_r($mu, true));
+    check('  GIF89 marker matched by signature',
+        in_array('gif_marker_in_php', (array) $mu['signatures'], true), print_r($mu['signatures'], true));
+}
+
+// Plugin updates unpack PHP into wp-content/upgrade constantly; that must not
+// become noise now that PHP bypasses quiet paths elsewhere.
+mkdir($root . '/wp-content/upgrade/some-plugin', 0755, true);
+$updateBytes = file_put_contents($root . '/wp-content/upgrade/some-plugin/some-plugin.php', "<?php\n// ordinary plugin file\n");
+check('the plugin-update write actually happened', $updateBytes === 30, 'wrote ' . var_export($updateBytes, true));
+check('routine plugin-update writes stay quiet',
+    find_event('file_write', 'upgrade/some-plugin') === null);
+
 echo "\n=== Baseline scanner ===\n";
 
 CAZ_Sentry_Write_Watcher::unregister();
+
+// Mirror the recommended install layout so the scanner meets Sentry's own
+// files sitting in the same directory it treats as critical.
+mkdir($root . '/wp-content/mu-plugins/caz-sentry/includes', 0755, true);
+file_put_contents($root . '/wp-content/mu-plugins/00-caz-sentry.php', "<?php // loader\n");
+file_put_contents($root . '/wp-content/mu-plugins/caz-sentry/caz-sentry.php', "<?php // main\n");
+file_put_contents($root . '/wp-content/mu-plugins/caz-sentry/includes/Journal.php', "<?php // journal\n");
 check('wrapper unregisters cleanly', !CAZ_Sentry_Write_Watcher::is_active());
 check('filesystem still works after unregister', file_get_contents($root . '/index.php') !== false);
 
@@ -220,6 +279,27 @@ $first = CAZ_Sentry_Baseline::scan('test-first');
 check('first scan creates a baseline', !empty($first['first_run']));
 check('first scan finds the planted shell',
     $first['suspicious'] >= 2, 'suspicious=' . $first['suspicious']);
+
+// Sentry installs itself into mu-plugins, where any PHP is normally critical.
+// It must baseline its own files without reporting them as findings.
+$suspiciousNow = (array) CAZ_Sentry_Baseline::load()['suspicious'];
+$baselinedNow  = (array) CAZ_Sentry_Baseline::load()['files'];
+
+$selfFlagged = array();
+foreach ($suspiciousNow as $path => $info) {
+    if (strpos($path, 'caz-sentry') !== false) {
+        $selfFlagged[] = $path;
+    }
+}
+check('Sentry does not report its own files as findings',
+    $selfFlagged === array(), implode(', ', $selfFlagged));
+check('Sentry still baselines its own files, so tampering stays visible',
+    isset($baselinedNow['/wp-content/mu-plugins/00-caz-sentry.php'])
+    && isset($baselinedNow['/wp-content/mu-plugins/caz-sentry/includes/Journal.php']),
+    implode(', ', array_slice(array_keys($baselinedNow), 0, 6)));
+check('a genuinely malicious must-use plugin is still reported',
+    isset($suspiciousNow['/wp-content/mu-plugins/index.php']),
+    implode(', ', array_keys($suspiciousNow)));
 
 $sus = find_event('suspicious_file', 'uploads/2026/08/shell.php');
 check('planted shell reported as suspicious', $sus !== null);
@@ -288,6 +368,37 @@ $benign = array(
 foreach ($benign as $label => $sample) {
     $hits = CAZ_Sentry_Signatures::match($sample);
     check("no false positive: $label", $hits === array(), 'matched: ' . implode(', ', $hits));
+}
+
+echo "\n=== Filename judgements ===\n";
+
+$badNames = array(
+    'wp-content/uploads/2026/08/shell.php'      => 'php_file_in_uploads',
+    'wp-content/mu-plugins/index.php'           => 'mu_plugin_executes_on_every_page_load',
+    'accesson.php'                              => 'known_backdoor_filename',
+    'wp-content/plugins/x/filefuns.php'         => 'known_backdoor_filename',
+    'wp-content/68425ec92487.php'               => 'random_hex_filename',
+    'wp-content/uploads/invoice.pdf.php'        => 'double_extension',
+    'wp-content/cache/cache.php'                => 'php_file_in_cache_directory',
+);
+foreach ($badNames as $path => $expected) {
+    $verdict = CAZ_Sentry_Signatures::match_filename($path);
+    check("condemns: $path", $verdict && $verdict['reason'] === $expected,
+        $verdict ? 'got ' . $verdict['reason'] : 'no verdict');
+}
+
+$okNames = array(
+    'wp-content/plugins/fluent-smtp/fluent-smtp.php',
+    'wp-includes/class-wp-query.php',
+    'wp-content/themes/twentytwenty/functions.php',
+    'wp-admin/admin-ajax.php',
+    'wp-content/plugins/elementor/includes/base/controls-stack.php',
+    'wp-content/uploads/2026/08/photo.jpg',
+    'index.php',
+);
+foreach ($okNames as $path) {
+    $verdict = CAZ_Sentry_Signatures::match_filename($path);
+    check("allows: $path", $verdict === null, $verdict ? 'flagged as ' . $verdict['reason'] : '');
 }
 
 // ------------------------------------------------------------------ guard

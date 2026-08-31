@@ -154,6 +154,48 @@ Two patterns are worth recognising immediately:
 | `cron_scheduled` | A scheduled event. `orphan: 1` means nothing on the site knows how to run it. |
 | `post_content_injected` | Page or post content gained a `<script>`, `<iframe>` or encoded payload. |
 
+## Tuned to this site's infection
+
+This infection worked in two different places, which is why it was hard to
+pin down. Sentry is calibrated for both.
+
+**Hidden backdoor files.** Standalone PHP shells reached directly by URL —
+`accesson.php`, `filefuns.php`, `68425ec92487.php`, and `cache.php` files.
+They never appear in a page, so nothing in "View Source" would show them.
+Sentry treats these as critical the instant one is written, on the filename
+alone, before any content is even read:
+
+- Exact names already seen here (`accesson.php`, `filefuns.php`) plus the
+  classic shells. Add more to `$knownBadNames` in `includes/Signatures.php`
+  as new ones turn up.
+- Randomly generated hex names, which is what `68425ec92487.php` is.
+- Double extensions, in both forms (`invoice.pdf.php`, `shell.php.jpg`).
+- PHP anywhere under `uploads/` or in a cache directory. **The cache case
+  matters here specifically:** cache directories churn constantly and are
+  otherwise suppressed to keep the journal readable, but PHP written into one
+  is never routine and is always reported. That is how a `cache.php` would be
+  caught rather than lost in the noise.
+
+**The must-use plugin injector.** `wp-content/mu-plugins/index.php` prepending
+junk ahead of the real page HTML, with `GIF89` markers — the visible homepage
+corruption. Must-use plugins run before every other plugin on every page load,
+which is what made it so effective.
+
+- Any PHP written into `wp-content/mu-plugins/` is critical, full stop.
+- `GIF89` markers in a PHP file, and output-prepending patterns
+  (`ob_start` with a callback, an early `muplugins_loaded`/`plugins_loaded`
+  hook that echoes) match by signature.
+- Installing Sentry as a must-use plugin puts it in that same directory. It
+  loads first (`00-` sorts before `index.php`), so if that injector is
+  recreated, Sentry is already watching and will name whatever wrote it.
+  Sentry's own files are baselined but exempt from the mu-plugins rule, so it
+  does not report itself.
+
+Nothing here replaces the daily tripwire that checks whether the known files
+are back. That answers *"is it back?"*. This answers *"what put it there?"* —
+and the absence of a write event, when a file reappears, is the finding that
+points at leaked credentials rather than a vulnerable plugin.
+
 ## The first 48 hours
 
 1. Install as a must-use plugin, set the alert email, and load **Tools → Sentry**.
@@ -207,4 +249,10 @@ behaves like malware: drops a backdoor into `uploads/`, writes through
 `eval()`'d code, stages-and-renames a payload, and backdates an mtime. It
 asserts each one was caught and correctly attributed, that ordinary
 filesystem behaviour is unchanged, that reads are never logged, and that the
-fail-safe guard trips. 63 assertions, no WordPress required.
+fail-safe guard trips.
+
+It also replays this site's specific infection: a `cache.php` dropped into a
+cache directory, a shell named `accesson.php`, a `68425ec92487.php`, and a
+`mu-plugins/index.php` carrying `GIF89` markers — checking each is caught and
+that ordinary plugin updates and Sentry's own files are not. 91 assertions,
+no WordPress required.

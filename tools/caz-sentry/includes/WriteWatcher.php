@@ -61,6 +61,19 @@ class CAZ_Sentry_Write_Watcher
         'txt' => 1, 'html' => 1, 'htm' => 1, 'suspected' => 1,
     );
 
+    /** Extensions that can be executed by the webserver. */
+    private static $execExt = array(
+        'php' => 1, 'php3' => 1, 'php4' => 1, 'php5' => 1, 'php7' => 1, 'php8' => 1,
+        'phtml' => 1, 'phps' => 1, 'phar' => 1,
+    );
+
+    /**
+     * The only places a PHP file is written as a matter of routine: plugin
+     * updates unpacking, and WP Rocket regenerating its config. Everywhere
+     * else, PHP appearing in a churn directory is treated as an intrusion.
+     */
+    private static $phpChurnPaths = array();
+
     private static $watchNames = array(
         '.htaccess' => 1, '.user.ini' => 1, 'wp-config.php' => 1,
         '.htpasswd' => 1, 'php.ini' => 1, 'web.config' => 1, 'robots.txt' => 1,
@@ -103,6 +116,11 @@ class CAZ_Sentry_Write_Watcher
         if (defined('CAZ_SENTRY_LOG_DIR') && CAZ_SENTRY_LOG_DIR) {
             self::$quietPaths[] = rtrim(str_replace('\\', '/', CAZ_SENTRY_LOG_DIR), '/') . '/';
         }
+
+        self::$phpChurnPaths = array(
+            $content . '/upgrade/',
+            $content . '/wp-rocket-config/',
+        );
 
         if (!@stream_wrapper_unregister(self::PROTOCOL)) {
             return false;
@@ -257,9 +275,24 @@ class CAZ_Sentry_Write_Watcher
         }
 
         foreach (self::$quietPaths as $quiet) {
-            if ($quiet !== '' && strpos($path, $quiet) === 0) {
+            if ($quiet === '' || strpos($path, $quiet) !== 0) {
+                continue;
+            }
+
+            // Executable code is never routine, wherever it lands. This site's
+            // infection dropped cache.php files into cache directories, so a
+            // quiet path must not be allowed to silence a PHP write.
+            if (!isset(self::$execExt[$ext])) {
                 return 2;
             }
+
+            foreach (self::$phpChurnPaths as $churn) {
+                if ($churn !== '' && strpos($path, $churn) === 0) {
+                    return 2;
+                }
+            }
+
+            return 1;
         }
 
         return 1;
@@ -395,6 +428,13 @@ class CAZ_Sentry_Write_Watcher
         $ext  = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
         $isPhp = in_array($ext, array('php', 'phtml', 'php5', 'php7', 'php8', 'phar', 'inc'), true);
 
+        // The name and location alone can settle it: a known backdoor
+        // filename, a randomly generated one, or PHP landing in mu-plugins.
+        $byName = CAZ_Sentry_Signatures::match_filename(self::rel($path));
+        if ($byName) {
+            $bump($byName['severity']);
+        }
+
         // Executable code appearing in the media library is never legitimate.
         if (strpos($path, '/wp-content/uploads/') !== false && $isPhp) {
             $bump('critical');
@@ -438,6 +478,7 @@ class CAZ_Sentry_Write_Watcher
         }
 
         $severity = self::classify($this->path, $hits, $trace['origin'], $trace['via_eval'], !$this->existed);
+        $byName   = CAZ_Sentry_Signatures::match_filename(self::rel(self::normalise($this->path)));
 
         $event = array(
             'type'       => $type,
@@ -456,6 +497,9 @@ class CAZ_Sentry_Write_Watcher
         if ($hits) {
             $event['signatures'] = $hits;
         }
+        if ($byName) {
+            $event['filename_flag'] = $byName['reason'];
+        }
         if ($this->capture !== '') {
             $event['sample'] = CAZ_Sentry_Context::clip($this->capture, self::SAMPLE_BYTES);
         }
@@ -468,10 +512,13 @@ class CAZ_Sentry_Write_Watcher
     {
         $trace = self::trace();
 
+        $byName = CAZ_Sentry_Signatures::match_filename(self::rel(self::normalise($path)));
+
         $event = array(
             'type'     => $type,
             'severity' => self::classify($path, array(), $trace['origin'], $trace['via_eval'], false),
             'path'     => self::rel(self::normalise($path)),
+            'filename_flag' => $byName ? $byName['reason'] : '',
             'blame'    => $trace['blame'],
             'origin'   => $trace['origin'],
             'via_eval' => $trace['via_eval'],
