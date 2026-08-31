@@ -36,3 +36,27 @@ if (!defined('CAZ_SENTRY_ALERT_EMAIL')) {
 // if (!defined('CAZ_SENTRY_MODE')) {
 //     define('CAZ_SENTRY_MODE', 'light');
 // }
+
+/* -------------------------------------------------------------------------
+ * Site-specific detection
+ *
+ * Everything below describes YOUR incident and YOUR site. It lives here,
+ * outside version control, for two reasons: a list of the backdoors found on
+ * your server is an inventory of your compromise, and a published detection
+ * ruleset tells whoever is getting in exactly what you are watching for.
+ * Keep config.php out of any repository.
+ * ---------------------------------------------------------------------- */
+
+// Backdoor filenames found on this server, comma separated. Any file with one
+// of these names is treated as critical the moment it is written, before its
+// contents are even read. Add to it as new ones turn up.
+// if (!defined('CAZ_SENTRY_EXTRA_BACKDOOR_NAMES')) {
+//     define('CAZ_SENTRY_EXTRA_BACKDOOR_NAMES', 'somefile.php,another.php');
+// }
+
+// Hostnames that legitimately belong to this site, comma separated. Used to
+// spot .htaccess rewrite rules that send traffic somewhere else. Sentry infers
+// this when it can; set it explicitly if the site answers on several domains.
+// if (!defined('CAZ_SENTRY_SITE_HOSTS')) {
+//     define('CAZ_SENTRY_SITE_HOSTS', 'example.com,www.example.com');
+// }

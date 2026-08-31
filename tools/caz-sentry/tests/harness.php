@@ -32,6 +32,12 @@ define('CAZ_SENTRY_ABSPATH', $root . '/');
 define('CAZ_SENTRY_CONTENT_DIR', $root . '/wp-content');
 define('CAZ_SENTRY_LOG_DIR', $root . '/sentry-logs');
 
+// Site-specific detection is configured, never hardcoded. These stand in for
+// what an operator would put in config.php after finding shells on their own
+// server.
+define('CAZ_SENTRY_EXTRA_BACKDOOR_NAMES', 'accesson.php, filefuns.php');
+define('CAZ_SENTRY_SITE_HOSTS', 'example.com');
+
 foreach (array('Context', 'Signatures', 'Journal', 'Alerts', 'Guard', 'WriteWatcher', 'Baseline') as $class) {
     require_once dirname(__DIR__) . '/includes/' . $class . '.php';
 }
@@ -389,6 +395,12 @@ foreach ($badNames as $path => $expected) {
         $verdict ? 'got ' . $verdict['reason'] : 'no verdict');
 }
 
+// The configured names are what make the first two entries above fire; a
+// plausible-looking shell name that was NOT configured must not be guessed at.
+check('an unconfigured filename is not guessed at',
+    CAZ_Sentry_Signatures::match_filename('wp-content/plugins/x/somethingelse.php') === null,
+    'flagged a name that is in neither the built-in nor the configured list');
+
 $okNames = array(
     'wp-content/plugins/fluent-smtp/fluent-smtp.php',
     'wp-includes/class-wp-query.php',
@@ -404,6 +416,18 @@ foreach ($okNames as $path) {
 }
 
 // ------------------------------------------------------------------ guard
+
+echo "\n=== Off-site redirect detection uses this site's own hostnames ===\n";
+
+// CAZ_SENTRY_SITE_HOSTS is 'example.com' for this run.
+check('a rewrite to somebody else\'s domain is flagged',
+    in_array('htaccess_redirect', CAZ_Sentry_Signatures::match("RewriteRule ^(.*)$ https://evil-domain.test/x [R,L]\n"), true));
+check('a rewrite to this site is not',
+    !in_array('htaccess_redirect', CAZ_Sentry_Signatures::match("RewriteRule ^(.*)$ https://example.com/x [R,L]\n"), true));
+check('the www form of this site is not either',
+    !in_array('htaccess_redirect', CAZ_Sentry_Signatures::match("RewriteRule ^(.*)$ https://www.example.com/x [R,L]\n"), true));
+check('an ordinary .htaccess is left alone',
+    CAZ_Sentry_Signatures::match("RewriteEngine On\nRewriteBase /\nRewriteRule ^index\\.php$ - [L]\n") === array());
 
 echo "\n=== Fail-safe guard ===\n";
 

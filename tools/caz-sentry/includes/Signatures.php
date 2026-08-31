@@ -68,9 +68,67 @@ class CAZ_Sentry_Signatures
         'header_prepend'    => array('/add_action\s*\(\s*[\'"](?:muplugins_loaded|plugins_loaded)[\'"][^)]{0,80}(?:ob_start|print|echo)/i', 'high'),
 
         // --- .htaccess tampering -------------------------------------------
-        'htaccess_redirect' => array('/RewriteRule[^\n]*https?:\/\/(?!(?:www\.)?concealedaz\.com)/i', 'high'),
+        // Off-site redirects are handled separately, in offsite_redirect(),
+        // because the rule depends on which hostnames belong to this site.
         'htaccess_php_exec' => array('/php_(?:value|flag)\s+(?:auto_prepend_file|allow_url_include|safe_mode)/i', 'critical'),
     );
+
+    /**
+     * Hostnames that legitimately belong to this site.
+     *
+     * Set CAZ_SENTRY_SITE_HOSTS (comma separated) to be explicit. Otherwise
+     * this is inferred, which is good enough for the redirect check.
+     */
+    private static function own_hosts()
+    {
+        $hosts = array();
+
+        if (defined('CAZ_SENTRY_SITE_HOSTS') && CAZ_SENTRY_SITE_HOSTS) {
+            foreach (explode(',', CAZ_SENTRY_SITE_HOSTS) as $host) {
+                $host = trim($host);
+                if ($host !== '') {
+                    $hosts[] = $host;
+                }
+            }
+        }
+
+        if (!$hosts && function_exists('home_url')) {
+            $parts = @parse_url(home_url());
+            if (!empty($parts['host'])) {
+                $hosts[] = $parts['host'];
+            }
+        }
+
+        if (!$hosts && !empty($_SERVER['HTTP_HOST'])) {
+            $hosts[] = (string) $_SERVER['HTTP_HOST'];
+        }
+
+        return $hosts;
+    }
+
+    /**
+     * A rewrite rule sending traffic to a host that is not this site's.
+     *
+     * Returns false when the site's own hostnames cannot be determined —
+     * guessing there would flag every legitimate redirect on the site.
+     */
+    private static function offsite_redirect($content)
+    {
+        $hosts = self::own_hosts();
+        if (!$hosts) {
+            return false;
+        }
+
+        $alternatives = array();
+        foreach ($hosts as $host) {
+            $host = preg_replace('/^www\./i', '', $host);
+            $alternatives[] = preg_quote($host, '/');
+        }
+
+        $pattern = '/RewriteRule[^\n]*https?:\/\/(?!(?:www\.)?(?:' . implode('|', $alternatives) . '))/i';
+
+        return (bool) @preg_match($pattern, $content);
+    }
 
     /**
      * @return array List of matched signature names (with severity suffix).
@@ -96,6 +154,10 @@ class CAZ_Sentry_Signatures
             if (@preg_match($spec[0], $content)) {
                 $hits[] = $name;
             }
+        }
+
+        if (count($hits) < $limit && strpos($content, 'RewriteRule') !== false && self::offsite_redirect($content)) {
+            $hits[] = 'htaccess_redirect';
         }
 
         foreach (self::structural_hits($content) as $hit) {
@@ -152,12 +214,13 @@ class CAZ_Sentry_Signatures
     }
 
     /**
-     * Filenames seen in this site's infection, plus long-standing web shells.
-     * Add to this list as new droppings are found.
+     * Long-standing, publicly documented web shells.
+     *
+     * Names specific to your own incident do not belong here — put them in
+     * CAZ_SENTRY_EXTRA_BACKDOOR_NAMES (see config.sample.php) so that a list
+     * of what was found on your server is not committed to a repository.
      */
     private static $knownBadNames = array(
-        'accesson.php'  => 1,
-        'filefuns.php'  => 1,
         'alfa.php'      => 1,
         'wso.php'       => 1,
         'c99.php'       => 1,
@@ -165,6 +228,30 @@ class CAZ_Sentry_Signatures
         'wp-conflg.php' => 1,
         'wp-cofig.php'  => 1,
     );
+
+    /**
+     * The built-in list plus anything configured for this particular site.
+     */
+    private static function bad_names()
+    {
+        static $names = null;
+        if ($names !== null) {
+            return $names;
+        }
+
+        $names = self::$knownBadNames;
+
+        if (defined('CAZ_SENTRY_EXTRA_BACKDOOR_NAMES') && CAZ_SENTRY_EXTRA_BACKDOOR_NAMES) {
+            foreach (explode(',', CAZ_SENTRY_EXTRA_BACKDOOR_NAMES) as $name) {
+                $name = strtolower(trim($name));
+                if ($name !== '') {
+                    $names[$name] = 1;
+                }
+            }
+        }
+
+        return $names;
+    }
 
     /**
      * Judge a file by its name and location alone — useful before the content
@@ -181,7 +268,8 @@ class CAZ_Sentry_Signatures
         $ext     = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
         $isPhp   = in_array($ext, array('php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'phps'), true);
 
-        if (isset(self::$knownBadNames[$lower])) {
+        $bad = self::bad_names();
+        if (isset($bad[$lower])) {
             return array('reason' => 'known_backdoor_filename', 'severity' => 'critical');
         }
 
@@ -194,7 +282,7 @@ class CAZ_Sentry_Signatures
             return array('reason' => 'double_extension', 'severity' => 'critical');
         }
 
-        // Randomly generated shell names: 68425ec92487.php and friends.
+        // Randomly generated shell names: twelve hex characters and the like.
         if ($isPhp && preg_match('/^[0-9a-f]{8,32}\.[a-z0-9]+$/i', $name)) {
             return array('reason' => 'random_hex_filename', 'severity' => 'critical');
         }
@@ -235,8 +323,16 @@ class CAZ_Sentry_Signatures
         $rank = array('info' => 0, 'medium' => 1, 'high' => 2, 'critical' => 3);
         $worst = 'info';
 
+        // Signatures that are evaluated dynamically rather than from the
+        // pattern table still need a severity.
+        $dynamic = array('htaccess_redirect' => 'high');
+
         foreach ($hits as $hit) {
-            $severity = isset(self::$patterns[$hit]) ? self::$patterns[$hit][1] : 'medium';
+            if (isset($dynamic[$hit])) {
+                $severity = $dynamic[$hit];
+            } else {
+                $severity = isset(self::$patterns[$hit]) ? self::$patterns[$hit][1] : 'medium';
+            }
             if ($rank[$severity] > $rank[$worst]) {
                 $worst = $severity;
             }

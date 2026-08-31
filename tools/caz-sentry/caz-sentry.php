@@ -3,7 +3,7 @@
  * Plugin Name: Sentry (change forensics)
  * Description: Records every change to this WordPress install and, crucially, which code made it. Built to answer "what keeps putting this back?".
  * Version:     1.0.0
- * Author:      ConcealedAZ site ops
+ * Author:      Site operations
  * License:     GPL-2.0-or-later
  *
  * Works either as a normal plugin or, preferably, as a must-use plugin so it

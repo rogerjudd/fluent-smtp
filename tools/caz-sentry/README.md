@@ -78,15 +78,15 @@ define( 'CAZ_SENTRY_ALERT_EMAIL', 'you@example.com' );
 ### The blind spot in every install above, and how to close it
 
 **A must-use plugin only sees requests that load WordPress.** A standalone
-backdoor does not. When someone requests `concealedaz.com/accesson.php`
+backdoor does not. When someone requests `yoursite.com/some-shell.php`
 directly, PHP runs that one file and nothing else — no WordPress, no
 mu-plugins, no Sentry. Whatever that shell writes is invisible to the write
 watcher. The hourly scan still notices the *result*, but by then the
 attribution is gone.
 
-That matters here specifically, because the shells found on this site are
-exactly that kind: reached by typing the URL, invisible to visitors and to
-"View Source".
+If the shells on your server are that kind — reached by typing the URL,
+invisible to visitors and to "View Source" — this is the gap that matters
+most, and the mu-plugin install alone will not close it.
 
 PHP's `auto_prepend_file` closes it. That directive runs a chosen file before
 *every* PHP script on the server, WordPress or not — so a shell invoked
@@ -150,8 +150,14 @@ All optional; the defaults are sensible.
 | `CAZ_SENTRY_WEBHOOK` | — | POST the same alerts as JSON. |
 | `CAZ_SENTRY_ALERTS` | `true` | Set `false` to silence notifications entirely. |
 | `CAZ_SENTRY_CAPTURE_POST` | `false` | Record POST *values*, not just field names. See the privacy note below. |
+| `CAZ_SENTRY_EXTRA_BACKDOOR_NAMES` | — | Comma-separated backdoor filenames found on **your** server. Put these in `config.php`, not in tracked source. |
+| `CAZ_SENTRY_SITE_HOSTS` | inferred | Comma-separated hostnames that belong to this site, used to spot off-site redirects in `.htaccess`. |
 
 Email, webhook and mode are also editable at **Tools → Sentry → Settings**.
+
+The last two describe your site rather than your preferences. Set them in
+`config.php` (git-ignored), so that a list of your backdoors and your domains
+never lands in a repository.
 
 **Privacy note:** by default Sentry records the *names* of submitted form
 fields, never their values — so passwords, card numbers and customer details
@@ -202,47 +208,53 @@ Two patterns are worth recognising immediately:
 | `cron_scheduled` | A scheduled event. `orphan: 1` means nothing on the site knows how to run it. |
 | `post_content_injected` | Page or post content gained a `<script>`, `<iframe>` or encoded payload. |
 
-## Tuned to this site's infection
+## Tuning it to your incident
 
-This infection worked in two different places, which is why it was hard to
-pin down. Sentry is calibrated for both.
+Two infection shapes are common, and Sentry is calibrated for both.
 
-**Hidden backdoor files.** Standalone PHP shells reached directly by URL —
-`accesson.php`, `filefuns.php`, `68425ec92487.php`, and `cache.php` files.
-They never appear in a page, so nothing in "View Source" would show them.
-Sentry treats these as critical the instant one is written, on the filename
-alone, before any content is even read:
+**Hidden backdoor files.** Standalone PHP shells reached by typing the URL.
+They never appear in a page, so nothing in "View Source" shows them, and a
+visitor would never trip over one. Sentry treats these as critical the moment
+one is written, on the filename alone, before the contents are read:
 
-- Exact names already seen here (`accesson.php`, `filefuns.php`) plus the
-  classic shells. Add more to `$knownBadNames` in `includes/Signatures.php`
-  as new ones turn up.
-- Randomly generated hex names, which is what `68425ec92487.php` is.
+- Long-standing public shell names, built in.
+- **Names from your own incident**, which you add via
+  `CAZ_SENTRY_EXTRA_BACKDOOR_NAMES` in `config.php`. Keep them there rather
+  than in the source: a list of the backdoors found on your server is an
+  inventory of your compromise, and `config.php` is git-ignored for that
+  reason.
+- Randomly generated names — a run of hex characters, or an all-lowercase,
+  digit-heavy stem.
 - Double extensions, in both forms (`invoice.pdf.php`, `shell.php.jpg`).
-- PHP anywhere under `uploads/` or in a cache directory. **The cache case
-  matters here specifically:** cache directories churn constantly and are
-  otherwise suppressed to keep the journal readable, but PHP written into one
-  is never routine and is always reported. That is how a `cache.php` would be
-  caught rather than lost in the noise.
+- PHP anywhere under `uploads/` or in a cache directory. **The cache case is
+  easy to miss:** cache directories churn constantly and are otherwise
+  suppressed to keep the journal readable, but PHP written into one is never
+  routine and is always reported, so a shell parked there does not get lost in
+  the noise.
 
-**The must-use plugin injector.** `wp-content/mu-plugins/index.php` prepending
-junk ahead of the real page HTML, with `GIF89` markers — the visible homepage
-corruption. Must-use plugins run before every other plugin on every page load,
-which is what made it so effective.
+**Output injected ahead of the page.** A must-use plugin, or an early hook,
+prepending markup before the real page HTML — spam links, a redirect, hostile
+JavaScript, or the `GIF89` markers that come with image-disguised payloads.
+Must-use plugins run before every other plugin on every page load, which is
+what makes that spot so effective.
 
 - Any PHP written into `wp-content/mu-plugins/` is critical, full stop.
-- `GIF89` markers in a PHP file, and output-prepending patterns
-  (`ob_start` with a callback, an early `muplugins_loaded`/`plugins_loaded`
-  hook that echoes) match by signature.
+- `GIF89` markers in a PHP file, and output-prepending patterns (`ob_start`
+  with a callback, an early `muplugins_loaded`/`plugins_loaded` hook that
+  echoes) match by signature.
 - Installing Sentry as a must-use plugin puts it in that same directory. It
-  loads first (`00-` sorts before `index.php`), so if that injector is
+  loads first (`00-` sorts ahead of `index.php`), so if such an injector is
   recreated, Sentry is already watching and will name whatever wrote it.
   Sentry's own files are baselined but exempt from the mu-plugins rule, so it
   does not report itself.
 
-Nothing here replaces the daily tripwire that checks whether the known files
-are back. That answers *"is it back?"*. This answers *"what put it there?"* —
-and the absence of a write event, when a file reappears, is the finding that
-points at leaked credentials rather than a vulnerable plugin.
+None of this replaces a routine check for whether known-bad files are back.
+That answers *"is it back?"*. This answers *"what put it there?"*.
+
+Nothing about your site should end up in the tracked source. Domains go in
+`CAZ_SENTRY_SITE_HOSTS`, backdoor names in `CAZ_SENTRY_EXTRA_BACKDOOR_NAMES`,
+both in `config.php`. Publishing a detection ruleset tells whoever is getting
+in exactly what you are watching for.
 
 ## The first 48 hours
 
@@ -300,10 +312,11 @@ asserts each one was caught and correctly attributed, that ordinary
 filesystem behaviour is unchanged, that reads are never logged, and that the
 fail-safe guard trips.
 
-It also replays this site's specific infection: a `cache.php` dropped into a
-cache directory, a shell named `accesson.php`, a `68425ec92487.php`, and a
-`mu-plugins/index.php` carrying `GIF89` markers — checking each is caught and
-that ordinary plugin updates and Sentry's own files are not.
+It also replays the two infection shapes above: a PHP file dropped into a
+cache directory, a configured backdoor name, a random hex name, and a
+`mu-plugins/index.php` carrying `GIF89` markers — checking each is caught,
+that a name in neither the built-in nor the configured list is *not* guessed
+at, and that ordinary plugin updates and Sentry's own files are left alone.
 
 `prepend-test.php` covers the `auto_prepend_file` install in separate PHP
 processes with no WordPress present at all: a backdoor writing a payload is
@@ -311,4 +324,4 @@ still caught and attributed, `ABSPATH` stays undefined so direct-access guards
 keep working, the kill switch works, and a broken or partially quarantined
 install still serves requests normally rather than taking the site down.
 
-109 assertions across both suites, no WordPress required.
+114 assertions across both suites, no WordPress required.

@@ -5,8 +5,8 @@
  * WHY THIS EXISTS
  *
  * Installed as a must-use plugin, Sentry only sees requests that boot
- * WordPress. A standalone backdoor — accesson.php, filefuns.php, a shell
- * dropped into uploads/ — is reached directly over HTTP and never loads
+ * WordPress. A standalone backdoor — a stray PHP file in the web root, a
+ * shell dropped into uploads/ — is reached directly over HTTP and never loads
  * WordPress at all. The mu-plugin never runs, so the watcher never sees what
  * that shell writes. Only the hourly scan notices, and only after the fact.
  *
